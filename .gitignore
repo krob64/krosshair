@@ -1,3 +1,5 @@
 .gdb_history
 textures
 lib
+png_to_header.py
+notes.md

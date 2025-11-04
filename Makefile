@@ -1,7 +1,7 @@
 LIBRARY = lib/krosshair.so
 
 CCFLAGS = -Wall -std=c99 -ggdb -fPIC -shared -I./include/
-LDFLAGS = -ldl
+LDFLAGS = -ldl -lm
 
 SOURCES = $(shell find src -type f -name "*.c")
 
