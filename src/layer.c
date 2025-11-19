@@ -10,10 +10,10 @@
 #include <vulkan/vulkan_core.h>
 #include <math.h>
 
-#include "../../include/dispatch.h"
+#include "../include/dispatch.h"
 #define STB_IMAGE_IMPLEMENTATION
-#include "../../include/default_crosshair.h"
-#include "../../include/stb_image.h"
+#include "../include/default_crosshair.h"
+#include "../include/stb_image.h"
 
 #define K_NO_MEMORYTYPE 0xFFFFFFFF
 

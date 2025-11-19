@@ -1,4 +1,4 @@
-#include "../../include/dispatch.h"
+#include "../include/dispatch.h"
 #include <string.h>
 
 void* get_key(void* inst) {
