@@ -11,7 +11,8 @@ make && make install
 
 ## Usage
 Simply start the your game with `KROSSHAIR=1` set. When using steam, put `KROSSHAIR=1 %command%` into the launch options of your game. Additionally you can use the following variables to customize your crosshair.
-- `KROSSHAIR_IMG=/path/to/crosshair-image.png` (it also expands `~/crosshairs/crosshair.png`)
+- `KROSSHAIR_IMG=/path/to/crosshair-image.png` (i've provided some crosshairs in [here](https://github.com/krob64/krosshair/tree/main/crosshairs), copy them wherever you like)
+    - alternatively you can use a [crosshair generator site](https://crosshair.themeta.gg/) (or [this one](https://guywiddacaptain.github.io/aimX/))
 - `KROSSHAIR_SCALE=1.0` (scaling the scrosshair may make it look blurry, i'd suggest to just create a bigger/smaller crosshair)
 
 ## Can i get banned for this?
