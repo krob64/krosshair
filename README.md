@@ -6,7 +6,7 @@ A crosshair overlay for games on linux using vulkan.
 
 ## Installation
 `
-# make && make install
+make && make install
 `
 
 ## Usage
@@ -20,4 +20,4 @@ I don't know, use at your own risk. I've only used it in Quake Champions and STR
 
 ## Issues
 As of now, the overlay leaks a bit of memory everytime you alt-tab out of/into the game, as well as everytime the window is being resized and upon resolution changes. It's not a big leak and shouldn't cause any problems, but it's still worth noting.
-I've tried fixing it multiple times but have always hit a dead-end. If someone more experienced with vulkan wants to help, take a look at this issue.
+I've tried fixing it multiple times but have always hit a dead-end. If someone more experienced with vulkan wants to help, take a look at [this issue](https://github.com/krob64/krosshair/issues/1). I know it's a bit of a mess, this whole project is based on a morally questionable apex legends project which i'm unsure if i should link to it here, coupled with me jumping into it right after completing the vulkan tutorial.

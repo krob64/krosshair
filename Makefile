@@ -14,6 +14,7 @@ all:
 install:
 	sudo mkdir -p /usr/lib/krosshair
 	sudo cp $(LIBRARY) /usr/lib/krosshair/krosshair.so
+	sudo cp krosshair.json /usr/share/vulkan/implicit_layer.d/krosshair.json
 
 clean:
 	rm -f $(LIBRARY)
