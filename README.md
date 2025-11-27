@@ -5,9 +5,9 @@ A crosshair overlay for games on linux using vulkan.
 ![quake](img/quake-crosshair.png)
 
 ## Installation
-`
-make && make install
-`
+`make && make install`
+
+On nixos-unstable: Add `krosshair` (or clone and add `(callPackage <local krosshair repo path>/derivation.nix { })`) to packages and `nixos-rebuild switch`.
 
 ## Usage
 Simply start the your game with `KROSSHAIR=1` set. When using steam, put `KROSSHAIR=1 %command%` into the launch options of your game. Additionally you can use the following variables to customize your crosshair.
@@ -18,6 +18,9 @@ Simply start the your game with `KROSSHAIR=1` set. When using steam, put `KROSSH
 ## Can i get banned for this?
 I don't know, use at your own risk. I've only used it in Quake Champions and STRAFTAT, both of which don't really have an anticheat.
 
+## Setting up requirements
+Needs Vulkan libs to build.
+All requirements can be set up with `nix-shell' when nix is installed.
 
 ## Issues
 As of now, the overlay leaks a bit of memory everytime you alt-tab out of/into the game, as well as everytime the window is being resized and upon resolution changes. It's not a big leak and shouldn't cause any problems, but it's still worth noting.
