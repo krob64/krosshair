@@ -12,9 +12,8 @@ all:
 	$(CC) $(LDFLAGS) $(CCFLAGS) $(SOURCES) -o $(LIBRARY)
 
 install:
-	sudo mkdir -p /usr/lib/krosshair
-	sudo cp $(LIBRARY) /usr/lib/krosshair/krosshair.so
-	sudo cp krosshair.json /usr/share/vulkan/implicit_layer.d/krosshair.json
+	install -Dm755 $(LIBRARY) /usr/lib/krosshair/krosshair.so
+	install -Dm644 krosshair.json /usr/share/vulkan/implicit_layer.d/krosshair.json
 
 clean:
 	rm -f $(LIBRARY)
