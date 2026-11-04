@@ -336,6 +336,7 @@ typedef struct command_buffer_data {
 
 typedef struct krosshair_draw {
         VkCommandBuffer cmd_buffer;
+        VkQueue present_queue;
 
         VkSemaphore crossengine_semaphore;
         VkSemaphore semaphore;
@@ -359,9 +360,9 @@ typedef struct swapchain_data {
 
         uint32_t n_images;
 
-        VkImage images[16];
-        VkImageView image_views[16];
-        VkFramebuffer framebuffers[16];
+        VkImage* images;
+        VkImageView* image_views;
+        VkFramebuffer* framebuffers;
 
         VkRenderPass render_pass;
 
@@ -383,7 +384,7 @@ typedef struct swapchain_data {
         VkBuffer crosshair_upload_buffer;
         VkDeviceMemory crosshair_upload_buffer_mem;
 
-        krosshair_draw_t* draw;
+        krosshair_draw_t** draws;
 
 } swapchain_data_t;
 
@@ -590,6 +591,7 @@ static void create_or_resize_buffer(device_data_t* device_data,
 
 static void shutdown_krosshair_image(swapchain_data_t* data)
 {
+        if (!data->crosshair_uploaded) return;
         device_data_t* device_data = data->device_data;
         device_data->vtable.DestroyImageView(device_data->device,
                                              data->crosshair_image_view, NULL);
@@ -889,21 +891,25 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
         data->crosshair_uploaded = 1;
 }
 
-/* allocated a krosshair_draw_t instance that must be free'd at the end of its
- * lifetime
- * */
-static void create_draw(swapchain_data_t* data)
+static void create_draw(swapchain_data_t* data, queue_data_t* present_queue,
+                        unsigned n_wait_semaphores, uint32_t image_index)
 {
         device_data_t* device_data = data->device_data;
-        krosshair_draw_t* draw     = data->draw;
+        krosshair_draw_t* draw     = data->draws[image_index];
 
         if (draw) {
-                if (device_data->vtable.GetFenceStatus(
-                        device_data->device, draw->fence) == VK_SUCCESS) {
-                        VK_CHECK(device_data->vtable.ResetFences(
-                            device_data->device, 1, &draw->fence));
-                        return;
-                }
+                /* Waiting on the application's present semaphores also waits
+                 * for the newly acquired image. That makes the previous
+                 * presentation of this image safe to reuse. Without a wait
+                 * semaphore, fall back to waiting for the present queue. */
+                if (n_wait_semaphores == 0)
+                        VK_CHECK(device_data->vtable.QueueWaitIdle(
+                            draw->present_queue));
+                VK_CHECK(device_data->vtable.WaitForFences(
+                    device_data->device, 1, &draw->fence, VK_TRUE, UINT64_MAX));
+                VK_CHECK(device_data->vtable.ResetFences(
+                    device_data->device, 1, &draw->fence));
+                return;
         }
 
         VkSemaphoreCreateInfo sem_info = {};
@@ -911,6 +917,7 @@ static void create_draw(swapchain_data_t* data)
 
         draw           = malloc(sizeof(*draw));
         memset(draw, 0, sizeof(*draw));
+        draw->present_queue = present_queue->queue;
 
         VkCommandBufferAllocateInfo cmd_buffer_info = {};
         cmd_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -933,7 +940,7 @@ static void create_draw(swapchain_data_t* data)
             device_data->device, &sem_info, NULL,
             &draw->crossengine_semaphore));
 
-        data->draw = draw;
+        data->draws[image_index] = draw;
 }
 
 static krosshair_draw_t* render_swapchain_display(
@@ -943,8 +950,8 @@ static krosshair_draw_t* render_swapchain_display(
 {
         device_data_t* device_data = data->device_data;
 
-        create_draw(data);
-        krosshair_draw_t* draw = data->draw;
+        create_draw(data, present_queue, n_wait_semaphores, image_index);
+        krosshair_draw_t* draw = data->draws[image_index];
         device_data->vtable.ResetCommandBuffer(draw->cmd_buffer, 0);
 
         VkRenderPassBeginInfo render_pass_info = {};
@@ -1134,8 +1141,9 @@ static krosshair_draw_t* render_swapchain_display(
                  */
                 VkPipelineStageFlags* stages_wait =
                     malloc(sizeof(*stages_wait) * n_wait_semaphores);
-                memset(stages_wait, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                       sizeof(*stages_wait) * n_wait_semaphores);
+                for (unsigned i = 0; i < n_wait_semaphores; i++)
+                        stages_wait[i] =
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 
                 VkSubmitInfo submit_info       = {};
                 submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1401,8 +1409,15 @@ static void setup_swapchain_data(swapchain_data_t* data,
         VK_CHECK(device_data->vtable.GetSwapchainImagesKHR(
             device_data->device, data->swapchain, &n_images, NULL));
 
+        data->n_images    = n_images;
+        data->images      = calloc(n_images, sizeof(*data->images));
+        data->image_views = calloc(n_images, sizeof(*data->image_views));
+        data->framebuffers = calloc(n_images, sizeof(*data->framebuffers));
+        data->draws       = calloc(n_images, sizeof(*data->draws));
+
         VK_CHECK(device_data->vtable.GetSwapchainImagesKHR(
-            device_data->device, data->swapchain, &n_images, data->images));
+            device_data->device, data->swapchain, &data->n_images,
+            data->images));
 
         VkImageViewCreateInfo view_info = {};
         view_info.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1413,7 +1428,7 @@ static void setup_swapchain_data(swapchain_data_t* data,
         view_info.subresourceRange.levelCount     = 1;
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount     = 1;
-        for (size_t i = 0; i < n_images; i++) {
+        for (size_t i = 0; i < data->n_images; i++) {
                 view_info.image = data->images[i];
                 VK_CHECK(device_data->vtable.CreateImageView(
                     device_data->device, &view_info, NULL,
@@ -1429,7 +1444,7 @@ static void setup_swapchain_data(swapchain_data_t* data,
         fb_info.width           = data->width;
         fb_info.height          = data->height;
         fb_info.layers          = 1;
-        for (size_t i = 0; i < n_images; i++) {
+        for (size_t i = 0; i < data->n_images; i++) {
                 attachment = data->image_views[i];
                 VK_CHECK(device_data->vtable.CreateFramebuffer(
                     device_data->device, &fb_info, NULL,
@@ -1511,11 +1526,36 @@ static VkResult overlay_CreateSwapchainKHR(
 }
 
 static void overlay_DestroySwapchainKHR(VkDevice device,
-                                        VkSwapchainKHR* swapchain,
-                                        VkAllocationCallbacks* pAllocator)
+                                        VkSwapchainKHR swapchain,
+                                        const VkAllocationCallbacks* pAllocator)
 {
         device_data_t* device_data = FIND_OBJ(device_data_t, device);
         swapchain_data_t* data     = FIND_OBJ(swapchain_data_t, swapchain);
+
+        /* Present and transfer work can still reference these resources. */
+        VK_CHECK(device_data->vtable.DeviceWaitIdle(device));
+
+        for (size_t i = 0; i < data->n_images; i++) {
+                krosshair_draw_t* draw = data->draws[i];
+                if (!draw) continue;
+                device_data->vtable.DestroyBuffer(device, draw->vertex_buffer,
+                                                  NULL);
+                device_data->vtable.FreeMemory(device, draw->vertex_buffer_mem,
+                                               NULL);
+                device_data->vtable.DestroyBuffer(device, draw->index_buffer,
+                                                  NULL);
+                device_data->vtable.FreeMemory(device, draw->index_buffer_mem,
+                                               NULL);
+                device_data->vtable.DestroySemaphore(device, draw->semaphore,
+                                                     NULL);
+                device_data->vtable.DestroySemaphore(
+                    device, draw->crossengine_semaphore, NULL);
+                device_data->vtable.DestroyFence(device, draw->fence, NULL);
+                device_data->vtable.FreeCommandBuffers(device, data->cmd_pool, 1,
+                                                       &draw->cmd_buffer);
+                free(draw);
+        }
+        free(data->draws);
 
         for (size_t i = 0; i < data->n_images; i++) {
                 device_data->vtable.DestroyFramebuffer(
@@ -1524,10 +1564,24 @@ static void overlay_DestroySwapchainKHR(VkDevice device,
                     device_data->device, data->image_views[i], NULL);
         }
 
-        free(data->draw);
+        free(data->images);
+        free(data->image_views);
+        free(data->framebuffers);
+        device_data->vtable.DestroyCommandPool(device, data->cmd_pool, NULL);
+        shutdown_krosshair_image(data);
+        device_data->vtable.DestroyPipeline(device, data->pipeline, NULL);
+        device_data->vtable.DestroyPipelineLayout(device,
+                                                  data->pipeline_layout, NULL);
+        device_data->vtable.DestroyDescriptorPool(device,
+                                                   data->descriptor_pool, NULL);
+        device_data->vtable.DestroyDescriptorSetLayout(
+            device, data->descriptor_layout, NULL);
+        device_data->vtable.DestroySampler(device, data->crosshair_sampler,
+                                          NULL);
+        device_data->vtable.DestroyRenderPass(device, data->render_pass, NULL);
         unmap_object(HKEY(data->swapchain));
         device_data->vtable.DestroySwapchainKHR(device_data->device,
-                                                data->swapchain, NULL);
+                                                data->swapchain, pAllocator);
         free(data);
 }
 
