@@ -1,0 +1,225 @@
+name: Semantic Versioning and Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check-skip:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Check if this is a version bump commit
+        id: check
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          if echo "$MSG" | grep -q "^chore: bump version"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  version:
+    needs: [check-skip]
+    if: needs.check-skip.outputs.should_skip == 'false'
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      old_version: ${{ steps.bump.outputs.old_version }}
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm git
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Determine version bump
+        id: bump
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          OLD_VERSION=${LAST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
+
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=%s 2>/dev/null || git log HEAD --pretty=%s)
+
+          if echo "$COMMITS" | grep -q "^feat:"; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif echo "$COMMITS" | grep -q "^chore:\|^fix:\|^docs:"; then
+            PATCH=$((PATCH + 1))
+          fi
+
+          if echo "$COMMITS" | grep -q "^BREAKING CHANGE:"; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          fi
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "old_version=$OLD_VERSION" >> $GITHUB_OUTPUT
+          echo "Bumping $OLD_VERSION -> $NEW_VERSION"
+
+  build:
+    needs: [version]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install system dependencies
+        run: pacman -Syu --noconfirm base-devel vulkan-headers vulkan-icd-loader libx11 libgl git
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Build binary
+        run: KROSSHAIR_VERSION=${{ needs.version.outputs.new_version }} make release
+      - name: Determine architecture
+        id: arch
+        run: |
+          ARCH=$(uname -m)
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          if [ "$ARCH" = "x86_64" ]; then
+            echo "arch_name=x86_64" >> $GITHUB_OUTPUT
+          elif [ "$ARCH" = "aarch64" ]; then
+            echo "arch_name=aarch64" >> $GITHUB_OUTPUT
+          fi
+      - name: Update PKGBUILD versions
+        run: |
+          VERSION=${{ needs.version.outputs.new_version }}
+          sed -i "s/pkgver=.*/pkgver=$VERSION/" PKGBUILD
+          sed -i "s/pkgver=.*/pkgver=$VERSION/" aur/PKGBUILD
+      - name: Create tarball
+        run: |
+          ARCH_NAME=${{ steps.arch.outputs.arch_name }}
+          VERSION=${{ needs.version.outputs.new_version }}
+          mkdir -p krosshair-linux-${ARCH_NAME}/crosshairs
+          cp lib/krosshair.so krosshair-linux-${ARCH_NAME}/
+          cp krosshair.json krosshair-linux-${ARCH_NAME}/
+          cp LICENSE krosshair-linux-${ARCH_NAME}/ 2>/dev/null || true
+          cp -r crosshairs/* krosshair-linux-${ARCH_NAME}/crosshairs/ 2>/dev/null || true
+          tar -czf krosshair-linux-${ARCH_NAME}.tar.gz -C krosshair-linux-${ARCH_NAME} .
+          sha256sum krosshair-linux-${ARCH_NAME}.tar.gz > krosshair-linux-${ARCH_NAME}.sha256
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-output
+          path: |
+            PKGBUILD
+            aur/
+            krosshair-linux-*.tar.gz
+            krosshair-linux-*.sha256
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm git github-cli
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          name: build-output
+          path: .
+      - name: Configure git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          gh auth setup-git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit version bump and tag
+        run: |
+          VERSION=${{ needs.version.outputs.new_version }}
+          git add PKGBUILD aur/
+          git commit -m "chore: bump version to v${VERSION}" || echo "No changes to commit"
+          git tag "v${VERSION}" -f
+          git push origin main
+          git push origin "v${VERSION}" -f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub release
+        run: |
+          VERSION=${{ needs.version.outputs.new_version }}
+          ARCH_NAME=$(uname -m)
+          if [ "$ARCH_NAME" = "x86_64" ]; then
+            ARCH_NAME="x86_64"
+          elif [ "$ARCH_NAME" = "aarch64" ]; then
+            ARCH_NAME="aarch64"
+          fi
+          gh release delete "v${VERSION}" --yes 2>/dev/null || true
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "Release v${VERSION}" \
+            krosshair-linux-${ARCH_NAME}.tar.gz \
+            krosshair-linux-${ARCH_NAME}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  aur:
+    needs: [version, build, release]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: build-output
+          path: .
+      - name: Push to AUR
+        run: |
+          VERSION=${{ needs.version.outputs.new_version }}
+          pacman -Syu --noconfirm openssh git sudo base-devel
+
+          useradd -m builduser
+          echo "builduser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+          mkdir -p /home/builduser/.ssh
+          echo "$AUR_SSH_KEY" > /home/builduser/.ssh/aur
+          chmod 600 /home/builduser/.ssh/aur
+          chmod 700 /home/builduser/.ssh
+          chown -R builduser:builduser /home/builduser/.ssh
+          ssh-keyscan aur.archlinux.org >> /home/builduser/.ssh/known_hosts
+
+          cp -r aur /home/builduser/aur
+          chown -R builduser:builduser /home/builduser/aur
+
+          sudo -u builduser VERSION="$VERSION" GIT_SSH_COMMAND="ssh -i /home/builduser/.ssh/aur -o StrictHostKeyChecking=no" bash -c '
+            cd /home/builduser
+            git clone ssh://aur@aur.archlinux.org/krosshair.git aur-push 2>&1 || true
+            if [ -d "aur-push/.git" ]; then
+              echo "Cloned existing AUR repo"
+              cd aur-push
+              git fetch origin
+              git reset --hard origin/master
+              cd ..
+            else
+              echo "Creating new AUR repo (clone failed)"
+              mkdir -p aur-push
+              cd aur-push
+              git init
+              git remote add origin ssh://aur@aur.archlinux.org/krosshair.git
+              cd ..
+            fi
+
+            rm -rf aur-push/*
+            cp aur/PKGBUILD aur-push/
+            cp aur/krosshair.install aur-push/
+
+            cd aur-push
+            makepkg --printsrcinfo > .SRCINFO
+            git config user.name "GitHub Action"
+            git config user.email "action@github.com"
+            git add PKGBUILD .SRCINFO krosshair.install
+            git commit -m "Update to v${VERSION}" || echo "No changes to commit"
+            git push origin master
+          '
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
