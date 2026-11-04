@@ -5,7 +5,7 @@ A crosshair overlay for games on linux using vulkan.
 ![quake](img/quake-crosshair.png)
 
 ## Installation
-`make && make install`
+`make && sudo make install`
 
 On nixos-unstable: Add `krosshair` (or clone and add `(callPackage <local krosshair repo path>/derivation.nix { })`) to packages and `nixos-rebuild switch`.
 
