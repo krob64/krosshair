@@ -892,15 +892,19 @@ static void ensure_swapchain_crosshair(swapchain_data_t* data,
 }
 
 static void create_draw(swapchain_data_t* data, queue_data_t* present_queue,
-                        uint32_t image_index)
+                        unsigned n_wait_semaphores, uint32_t image_index)
 {
         device_data_t* device_data = data->device_data;
         krosshair_draw_t* draw     = data->draws[image_index];
 
         if (draw) {
-                /* The draw fence covers rendering, while presentation can still
-                 * be consuming the semaphore after that fence signals. */
-                VK_CHECK(device_data->vtable.QueueWaitIdle(draw->present_queue));
+                /* Waiting on the application's present semaphores also waits
+                 * for the newly acquired image. That makes the previous
+                 * presentation of this image safe to reuse. Without a wait
+                 * semaphore, fall back to waiting for the present queue. */
+                if (n_wait_semaphores == 0)
+                        VK_CHECK(device_data->vtable.QueueWaitIdle(
+                            draw->present_queue));
                 VK_CHECK(device_data->vtable.WaitForFences(
                     device_data->device, 1, &draw->fence, VK_TRUE, UINT64_MAX));
                 VK_CHECK(device_data->vtable.ResetFences(
@@ -946,7 +950,7 @@ static krosshair_draw_t* render_swapchain_display(
 {
         device_data_t* device_data = data->device_data;
 
-        create_draw(data, present_queue, image_index);
+        create_draw(data, present_queue, n_wait_semaphores, image_index);
         krosshair_draw_t* draw = data->draws[image_index];
         device_data->vtable.ResetCommandBuffer(draw->cmd_buffer, 0);
 
